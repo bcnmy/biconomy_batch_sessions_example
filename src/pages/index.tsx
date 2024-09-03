@@ -10,10 +10,15 @@ import {
   createSessionSmartAccountClient,
   getSingleSessionTxParams,
   createBundler,
+  CreateSessionDataParams,
+  createABISessionDatum,
+  createBatchSession,
+  getBatchSessionTxParams,
+  Session,
 } from "@biconomy/account";
 import { contractABI } from "../contract/contractABI";
 import { ethers } from "ethers";
-import { encodeFunctionData } from "viem";
+import { encodeFunctionData, parseAbi } from "viem";
 import { polygonAmoy, sepolia, berachainTestnetbArtio } from "viem/chains";
 import { toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
@@ -26,29 +31,18 @@ export default function Home() {
   );
   const [chainSelected, setChainSelected] = useState<number>(0);
   const [count, setCount] = useState<string | null>(null);
+  const [nftCount, setNftCount] = useState<string | null>(null);
   const [txnHash, setTxnHash] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<Session>();
 
   const chains = [
     {
       chainNo: 0,
-      chainId: 80084,
-      name: "Bera Testnet",
-      providerUrl: "https://bartio.rpc.b-harvest.io",
-      incrementCountContractAdd: "0xcf29227477393728935BdBB86770f8F81b698F1A",
-      biconomyPaymasterApiKey: "9ooHeMdTl.aa829ad6-e07b-4fcb-afc2-584e3400b4f5",
-      explorerUrl: "https://bartio.beratrail.io/tx/",
-      chain: berachainTestnetbArtio,
-      bundlerUrl:
-        "https://bundler.biconomy.io/api/v2/80084/nJPK7B3ru.dd7f7861-190d-41bd-af80-6877f74b8f44",
-      paymasterUrl:
-        "https://paymaster.biconomy.io/api/v1/80084/9ooHeMdTl.aa829ad6-e07b-4fcb-afc2-584e3400b4f5",
-    },
-    {
-      chainNo: 1,
       chainId: 11155111,
       name: "Ethereum Sepolia",
       providerUrl: "https://eth-sepolia.public.blastapi.io",
       incrementCountContractAdd: "0xd9ea570eF1378D7B52887cE0342721E164062f5f",
+      nftAddress: "0x1758f42Af7026fBbB559Dc60EcE0De3ef81f665e",
       biconomyPaymasterApiKey: "gJdVIBMSe.f6cc87ea-e351-449d-9736-c04c6fab56a2",
       explorerUrl: "https://sepolia.etherscan.io/tx/",
       chain: sepolia,
@@ -58,11 +52,12 @@ export default function Home() {
         "https://paymaster.biconomy.io/api/v1/11155111/gJdVIBMSe.f6cc87ea-e351-449d-9736-c04c6fab56a2",
     },
     {
-      chainNo: 2,
+      chainNo: 1,
       chainId: 80002,
       name: "Polygon Amoy",
       providerUrl: "https://rpc-amoy.polygon.technology/",
       incrementCountContractAdd: "0xfeec89eC2afD503FF359487967D02285f7DaA9aD",
+      nftAddress: "0x1758f42Af7026fBbB559Dc60EcE0De3ef81f665e",
       biconomyPaymasterApiKey: "TVDdBH-yz.5040805f-d795-4078-9fd1-b668b8817642",
       explorerUrl: "https://www.oklink.com/amoy/tx/",
       chain: polygonAmoy,
@@ -87,28 +82,53 @@ export default function Home() {
         chains[chainSelected].chain
       );
 
-    const policy: Policy[] = [
-      {
-        sessionKeyAddress,
-        //@ts-ignore
-        contractAddress: chains[chainSelected].incrementCountContractAdd,
-        functionSelector: "increment()",
-        rules: [],
-        interval: {
-          validUntil: 0,
-          validAfter: 0,
-        },
-        valueLimit: BigInt(0),
+    const abiSessionLeaf1: CreateSessionDataParams = createABISessionDatum({
+      interval: {
+        validUntil: 0,
+        validAfter: 0,
       },
+      sessionKeyAddress,
+      //@ts-ignore
+      contractAddress: chains[chainSelected].incrementCountContractAdd,
+      functionSelector: "increment()",
+      rules: [],
+      valueLimit: BigInt(0),
+    });
+
+    const abiSessionLeaf2: CreateSessionDataParams = createABISessionDatum({
+      interval: {
+        validUntil: 0,
+        validAfter: 0,
+      },
+      sessionKeyAddress,
+      //@ts-ignore
+      contractAddress: chains[chainSelected].nftAddress,
+      functionSelector: "safeMint(address)",
+      rules: [
+        {
+          offset: 0,
+          condition: 0,
+          //@ts-ignore
+          referenceValue: smartAccountAddress,
+        },
+      ],
+      valueLimit: BigInt(0),
+    });
+
+    const policyLeaves: CreateSessionDataParams[] = [
+      abiSessionLeaf1,
+      abiSessionLeaf2,
     ];
 
-    const { wait, session } = await createSession(
+    const { wait, session } = await createBatchSession(
       //@ts-ignore
       smartAccount,
-      policy,
       sessionStorageClient,
+      policyLeaves,
       withSponsorship
     );
+
+    setSessionId(session);
 
     const {
       receipt: { transactionHash },
@@ -124,18 +144,21 @@ export default function Home() {
     });
   };
 
-  const incrementCount = async () => {
-    const toastId = toast("Incrementing Count", { autoClose: false });
+  const batchTxn = async () => {
+    const toastId = toast("Batching Txns", { autoClose: false });
 
     const emulatedUsersSmartAccount = await createSessionSmartAccountClient(
       {
         //@ts-ignore
-        accountAddress: smartAccountAddress,
+        accountAddress: smartAccountAddress, // Dapp can set the account address on behalf of the user
         bundlerUrl: chains[chainSelected].bundlerUrl,
         paymasterUrl: chains[chainSelected].paymasterUrl,
         chainId: chains[chainSelected].chainId,
       },
-      smartAccountAddress
+      smartAccountAddress,
+      // sessionId,
+      // a) Full Session, b) storage client or c) the smartAccount address (if using default storage for your environment)
+      true // if in batch session mode
     );
 
     const minTx = {
@@ -147,17 +170,40 @@ export default function Home() {
       }),
     };
 
-    const params = await getSingleSessionTxParams(
+    console.log("minTx Data", minTx.data);
+
+    const nftMintTx = {
+      to: chains[chainSelected].nftAddress,
+      data: encodeFunctionData({
+        abi: parseAbi(["function safeMint(address _to)"]),
+        functionName: "safeMint",
+        //@ts-ignore
+        args: [smartAccountAddress],
+      }),
+    };
+
+    console.log("nftMintTx Data", nftMintTx.data);
+
+    const txs = [minTx, nftMintTx];
+
+    const batchSessionParams = await getBatchSessionTxParams(
       //@ts-ignore
-      smartAccountAddress,
-      chains[chainSelected].chain,
-      0
+      txs,
+      [0, 1],
+      // Order must match the order in which corresponding policies were set
+      //@ts-ignore
+      smartAccountAddress, // Storage client, full Session or simply the smartAccount address if using default storage for your environment
+      chains[chainSelected].chain
     );
 
-    const { wait } = await emulatedUsersSmartAccount.sendTransaction(minTx, {
-      ...params,
-      ...withSponsorship,
-    });
+    const { wait } = await emulatedUsersSmartAccount.sendTransaction(
+      //@ts-ignore
+      txs,
+      {
+        ...batchSessionParams,
+        ...withSponsorship,
+      }
+    );
 
     const {
       receipt: { transactionHash },
@@ -167,7 +213,7 @@ export default function Home() {
     setTxnHash(transactionHash);
 
     toast.update(toastId, {
-      render: "Session Creation Successful",
+      render: "Transation Successful",
       type: "success",
       autoClose: 5000,
     });
@@ -186,6 +232,29 @@ export default function Home() {
     );
     const countId = await contractInstance.getCount();
     setCount(countId.toString());
+    toast.update(toastId, {
+      render: "Successful",
+      type: "success",
+      autoClose: 5000,
+    });
+  };
+
+  const getNftCount = async () => {
+    const toastId = toast("Getting Count", { autoClose: false });
+    const contractAddress = chains[chainSelected].nftAddress;
+    const provider = new ethers.providers.JsonRpcProvider(
+      chains[chainSelected].providerUrl
+    );
+    const ERC721_ABI = [
+      "function balanceOf(address owner) view returns (uint256)",
+    ];
+    const contractInstance = new ethers.Contract(
+      contractAddress,
+      ERC721_ABI,
+      provider
+    );
+    const nftCount = await contractInstance.balanceOf(smartAccountAddress);
+    setNftCount(nftCount.toString());
     toast.update(toastId, {
       render: "Successful",
       type: "success",
@@ -281,9 +350,9 @@ export default function Home() {
             <div className="flex flex-col justify-start items-center gap-2">
               <button
                 className="w-[10rem] h-[3rem] bg-orange-300 text-black font-bold rounded-lg"
-                onClick={incrementCount}
+                onClick={batchTxn}
               >
-                Increment Count
+                Batch Txn
               </button>
               <span>
                 {txnHash && (
@@ -299,14 +368,25 @@ export default function Home() {
               </span>
             </div>
           </div>
-          <div className="flex flex-row justify-center items-center gap-4">
-            <button
-              className="w-[10rem] h-[3rem] bg-orange-300 text-black font-bold rounded-lg"
-              onClick={getCountId}
-            >
-              Get Count Value
-            </button>
-            <span>{count}</span>
+          <div className="flex flex-row items-center justify-center gap-4">
+            <div className="flex flex-col justify-center items-center gap-4">
+              <button
+                className="w-[10rem] h-[3rem] bg-orange-300 text-black font-bold rounded-lg"
+                onClick={getCountId}
+              >
+                Get Count Value
+              </button>
+              <span>{count}</span>
+            </div>
+            <div className="flex flex-col justify-center items-center gap-4">
+              <button
+                className="w-[10rem] h-[3rem] bg-orange-300 text-black font-bold rounded-lg"
+                onClick={getNftCount}
+              >
+                Get NFT count
+              </button>
+              <span>{nftCount}</span>
+            </div>
           </div>
         </>
       )}

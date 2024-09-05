@@ -2,13 +2,9 @@ import React, { useState } from "react";
 import {
   PaymasterMode,
   createSmartAccountClient,
-  createSession,
-  Rule,
-  Policy,
   createSessionKeyEOA,
   BiconomySmartAccountV2,
   createSessionSmartAccountClient,
-  getSingleSessionTxParams,
   createBundler,
   CreateSessionDataParams,
   createABISessionDatum,
@@ -19,7 +15,7 @@ import {
 import { contractABI } from "../contract/contractABI";
 import { ethers } from "ethers";
 import { encodeFunctionData, parseAbi } from "viem";
-import { polygonAmoy, sepolia, berachainTestnetbArtio } from "viem/chains";
+import { polygonAmoy, sepolia } from "viem/chains";
 import { toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 
@@ -33,7 +29,6 @@ export default function Home() {
   const [count, setCount] = useState<string | null>(null);
   const [nftCount, setNftCount] = useState<string | null>(null);
   const [txnHash, setTxnHash] = useState<string | null>(null);
-  const [sessionId, setSessionId] = useState<Session>();
 
   const chains = [
     {
@@ -127,8 +122,6 @@ export default function Home() {
       policyLeaves,
       withSponsorship
     );
-
-    setSessionId(session);
 
     const {
       receipt: { transactionHash },
@@ -300,8 +293,13 @@ export default function Home() {
 
   return (
     <main className="flex min-h-screen w-full flex-col items-center justify-start gap-8 p-24">
-      <div className="text-[4rem] font-bold text-orange-400">
-        Biconomy Session Key Demo
+      <div className="flex flex-col justify-center items-center">
+        <div className="text-[4rem] font-bold text-orange-400 text-center">
+          Biconomy Session Key Demo
+        </div>
+        <div className="text-[3rem] font-bold text-orange-400 text-center">
+          Batched Transactions
+        </div>
       </div>
 
       {!smartAccount && (
